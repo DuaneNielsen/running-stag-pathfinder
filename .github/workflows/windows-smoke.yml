@@ -111,7 +111,8 @@ jobs:
           Get-Process | Where-Object { $_.ProcessName -match 'python' } | Select-Object Id, ProcessName | Format-Table | Out-String | Write-Host
           Write-Host "release dir:"; Get-ChildItem $env:REL | Select-Object Name, Length | Format-Table | Out-String | Write-Host
           $arch = (Get-ChildItem $env:REL -File | Select-Object -First 1).Name
-          curl.exe -sS -v -o NUL -H "Authorization: Bearer beta-secret" "http://127.0.0.1:8799/$arch" 2>&1 | Select-Object -First 25
+          try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:8799/$arch" -Headers @{ Authorization = 'Bearer beta-secret' } -UseBasicParsing; Write-Host "IWR status $($r.StatusCode) bytes $($r.RawContentLength)" } catch { Write-Host "IWR failed: $($_.Exception.Message)" }
+          Get-ChildItem Env: | Where-Object { $_.Name -match 'proxy' } | Format-Table | Out-String | Write-Host
           Write-Host "--- host log"; Get-Content $env:AUTHLOG
 
       - name: Run the mod's exact command by hand, verbose (diagnosis)
