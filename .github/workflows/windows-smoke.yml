@@ -105,6 +105,15 @@ jobs:
           claude plugin install frontier --marketplace $PWD --config beta_token=beta-secret
           claude plugin list
 
+      - name: Is the gated host alive after its own step?
+        continue-on-error: true
+        run: |
+          Get-Process | Where-Object { $_.ProcessName -match 'python' } | Select-Object Id, ProcessName | Format-Table | Out-String | Write-Host
+          Write-Host "release dir:"; Get-ChildItem $env:REL | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          $arch = (Get-ChildItem $env:REL -File | Select-Object -First 1).Name
+          curl.exe -sS -v -o NUL -H "Authorization: Bearer beta-secret" "http://127.0.0.1:8799/$arch" 2>&1 | Select-Object -First 25
+          Write-Host "--- host log"; Get-Content $env:AUTHLOG
+
       - name: Run the mod's exact command by hand, verbose (diagnosis)
         continue-on-error: true
         run: |
