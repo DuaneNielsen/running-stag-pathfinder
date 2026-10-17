@@ -61,16 +61,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tmp = $env:RUNNER_TEMP
-          $rel = Join-Path $tmp 'rel'; $pkg = Join-Path $rel 'pkg'
-          New-Item -ItemType Directory -Force -Path (Join-Path $pkg 'bin') | Out-Null
+          $rel = Join-Path $tmp 'rel'; $pkg = Join-Path $tmp 'pkg'
+          New-Item -ItemType Directory -Force -Path $rel, $pkg | Out-Null
+          # Same shape as the real release: one top-level directory holding bin/ and share/ (mise strips a lone top-level directory).
           if ($IsWindows) {
-            Copy-Item "$env:SystemRoot\System32\whoami.exe" (Join-Path $pkg 'bin\frontier.exe')
-            $plat = 'windows-x64'; $archive = 'frontier-0.1.56-windows-x64.zip'
-            Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath (Join-Path $rel $archive)
+            $plat = 'windows-x64'; $archive = 'frontier-0.1.56-windows-x64.zip'; $top = Join-Path $pkg 'frontier-0.1.56-windows-x64'
+            New-Item -ItemType Directory -Force -Path (Join-Path $top 'bin'), (Join-Path $top 'share') | Out-Null
+            Copy-Item "$env:SystemRoot\System32\whoami.exe" (Join-Path $top 'bin\frontier.exe')
+            Set-Content -Path (Join-Path $top 'share\README.txt') -Value 'payload'
+            Compress-Archive -Path $top -DestinationPath (Join-Path $rel $archive)
           } else {
-            Copy-Item /usr/bin/whoami (Join-Path $pkg 'bin/frontier')
-            $plat = 'linux-x64'; $archive = 'frontier-0.1.56-linux-x64.tar.gz'
-            tar -czf (Join-Path $rel $archive) -C $pkg .
+            $plat = 'linux-x64'; $archive = 'frontier-0.1.56-linux-x64.tar.gz'; $top = Join-Path $pkg 'frontier-0.1.56-linux-x64'
+            New-Item -ItemType Directory -Force -Path (Join-Path $top 'bin'), (Join-Path $top 'share') | Out-Null
+            Copy-Item /usr/bin/whoami (Join-Path $top 'bin/frontier')
+            Set-Content -Path (Join-Path $top 'share/README.txt') -Value 'payload'
+            tar -czf (Join-Path $rel $archive) -C $pkg frontier-0.1.56-linux-x64
           }
           $sha = (Get-FileHash (Join-Path $rel $archive) -Algorithm SHA256).Hash.ToLower()
           $stub = "version = `"0.1.56`"`ntool = `"http:frontier`"`nbin = `"bin/frontier`"`nheaders = { Authorization = `"Bearer {{ env.FRONTIER_TOKEN }}`" }`n`n[platforms.$plat]`nurl = `"http://127.0.0.1:8799/$archive`"`nchecksum = `"sha256:$sha`"`n"
