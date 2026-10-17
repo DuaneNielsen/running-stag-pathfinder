@@ -105,6 +105,18 @@ jobs:
           claude plugin install frontier --marketplace $PWD --config beta_token=beta-secret
           claude plugin list
 
+      - name: Run the mod's exact command by hand, verbose (diagnosis)
+        continue-on-error: true
+        run: |
+          $env:FRONTIER_TOKEN = 'beta-secret'
+          $env:MISE_VERBOSE = '1'
+          $bin = if ($IsWindows) { "$PWD\plugin\bin\mise.cmd" } else { "$PWD/plugin/bin/mise" }
+          Write-Host "using $bin"
+          Get-Content plugin/bin/frontier.stub
+          & $bin tool-stub "$PWD/plugin/bin/frontier.stub" --help 2>&1 | Select-Object -First 80
+          Write-Host "exit: $LASTEXITCODE"
+          Remove-Item Env:MISE_VERBOSE; Remove-Item Env:FRONTIER_TOKEN
+
       - name: Start a session (no model login needed; the mod runs at session start)
         continue-on-error: true
         run: |
