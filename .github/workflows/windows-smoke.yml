@@ -13,7 +13,7 @@ on:
 
 jobs:
   smoke:
-    name: "smoke (${{ matrix.os }}${{ matrix.detune && ' detuned' || '' }})"
+    name: "smoke (${{ matrix.os }}${{ matrix.detune && ' detuned' || '' }}${{ matrix.nobash && ' no-bash' || '' }})"
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +21,7 @@ jobs:
           - { os: ubuntu-latest,  detune: false }
           - { os: windows-latest, detune: false }
           - { os: windows-latest, detune: true }
+          - { os: windows-latest, detune: true, nobash: true }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -52,6 +53,20 @@ jobs:
           foreach ($t in 'node','bun') { if (Get-Command $t -ErrorAction SilentlyContinue) { Write-Host "FAIL: $t still on PATH"; exit 1 } }
           Write-Host "pilot baseline: no node, no bun"
 
+      - name: "De-tune further: strip bash and sh from PATH (a Windows machine without Git for Windows or WSL)"
+        if: matrix.nobash
+        run: |
+          foreach ($t in 'bash','sh') {
+            while ($cmd = Get-Command $t -CommandType Application -ErrorAction SilentlyContinue) {
+              $dir = Split-Path $cmd.Source -Parent
+              Write-Host "removing $t dir: $dir"
+              $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and ($_ -ne $dir) }) -join ';'
+            }
+          }
+          "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          foreach ($t in 'bash','sh') { if (Get-Command $t -CommandType Application -ErrorAction SilentlyContinue) { Write-Host "FAIL: $t still on PATH"; exit 1 } }
+          Write-Host "no bash, no sh, no node, no bun"
+
       - name: claude --version
         run: claude --version
 
@@ -78,7 +93,8 @@ jobs:
             tar -czf (Join-Path $rel $archive) -C $pkg frontier-0.1.56-linux-x64
           }
           $sha = (Get-FileHash (Join-Path $rel $archive) -Algorithm SHA256).Hash.ToLower()
-          $stub = "version = `"0.1.56`"`ntool = `"http:frontier`"`nbin = `"bin/frontier`"`nheaders = { Authorization = `"Bearer {{ env.FRONTIER_TOKEN }}`" }`n`n[platforms.$plat]`nurl = `"http://127.0.0.1:8799/$archive`"`nchecksum = `"sha256:$sha`"`n"
+          $binline = if ($IsWindows) { 'bin = "bin\\frontier.exe"' } else { '' }
+          $stub = "version = `"0.1.56`"`ntool = `"http:frontier`"`nbin = `"bin/frontier`"`nheaders = { Authorization = `"Bearer {{ env.FRONTIER_TOKEN }}`" }`n`n[platforms.$plat]`nurl = `"http://127.0.0.1:8799/$archive`"`nchecksum = `"sha256:$sha`"`n$binline`n"
           Set-Content -Path plugin/bin/frontier.stub -Value $stub -Encoding utf8NoBOM -NoNewline
           Get-Content plugin/bin/frontier.stub
 
