@@ -53,21 +53,17 @@ jobs:
           foreach ($t in 'node','bun') { if (Get-Command $t -ErrorAction SilentlyContinue) { Write-Host "FAIL: $t still on PATH"; exit 1 } }
           Write-Host "pilot baseline: no node, no bun"
 
-      - name: "De-tune further: strip bash and sh from PATH (a Windows machine without Git for Windows or WSL)"
+      - name: "De-tune further: remove Git for Windows (bash, sh) from PATH; System32 stays (curl.exe, cmd.exe, WSL's bash.exe stub)"
         if: matrix.nobash
         run: |
-          $norm = { param($d) $d.TrimEnd('\', '/').ToLowerInvariant() }
-          for ($i = 0; $i -lt 20; $i++) {
-            $hit = $null
-            foreach ($t in 'bash', 'sh') { $c = Get-Command $t -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $hit = Split-Path $c.Source -Parent; break } }
-            if (-not $hit) { break }
-            Write-Host "removing dir holding bash/sh: $hit"
-            $drop = & $norm $hit
-            $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and ((& $norm $_) -ne $drop) }) -join ';'
-          }
+          $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and ($_ -notmatch '(?i)\\Git\\') }) -join ';'
           "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          foreach ($t in 'bash', 'sh') { if (Get-Command $t -CommandType Application -ErrorAction SilentlyContinue) { Write-Host "FAIL: $t still on PATH"; exit 1 } }
-          Write-Host "no bash, no sh, no node, no bun"
+          $sh = Get-Command sh -CommandType Application -ErrorAction SilentlyContinue
+          $bash = Get-Command bash -CommandType Application -ErrorAction SilentlyContinue
+          if ($sh) { Write-Host "FAIL: sh still on PATH at $($sh.Source)"; exit 1 }
+          if ($bash) { Write-Host "bash left on PATH: $($bash.Source) (the WSL launcher stub, present on any Windows with WSL)" }
+          foreach ($t in 'curl.exe', 'cmd.exe') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { Write-Host "FAIL: $t missing"; exit 1 } }
+          Write-Host "no Git for Windows, no node, no bun; curl.exe and cmd.exe present"
 
       - name: claude --version
         run: claude --version
