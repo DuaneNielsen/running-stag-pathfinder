@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# `frontier` on the Bash tool's PATH (a plugin's bin/ is): runs the cached binary through mise's tool stub.
+# The token is only needed for the first download (the mod does that); the placeholder keeps the stub's header template valid.
+d=$(dirname "$0")
+FRONTIER_TOKEN=${FRONTIER_TOKEN:-unset} exec "$d/mise" tool-stub "$d/frontier.stub" "$@"

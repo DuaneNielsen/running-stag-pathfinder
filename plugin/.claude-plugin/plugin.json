@@ -1,0 +1,2 @@
+{"name":"frontier","version":"0.1.56","description":"Frontier (beta): fetches its binary with your beta token","author":{"name":"wild-west"},
+ "userConfig":{"beta_token":{"type":"string","title":"Frontier beta token","description":"Token for the Frontier beta download","sensitive":true,"required":true}}}

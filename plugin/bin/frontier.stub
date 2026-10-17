@@ -1,0 +1,8 @@
+version = "0.1.56"
+tool = "http:frontier"
+bin = "bin/frontier"
+headers = { Authorization = "Bearer {{ env.FRONTIER_TOKEN }}" }
+
+[platforms.linux-x64]
+url = "http://127.0.0.1:8799/frontier-0.1.56-linux-x64.tar.gz"
+checksum = "sha256:d50a4a968f553d285f7b529d7970452dafa854b87989fc8b97694a7013be665d"

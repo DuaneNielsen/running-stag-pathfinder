@@ -1,0 +1,2 @@
+{"name":"running-stag","description":"Prototype: a mod that fetches a token-gated binary on first load.","owner":{"name":"wild-west"},
+ "plugins":[{"name":"frontier","source":"./plugin","description":"Frontier beta: fetches its binary with your beta token."}]}
