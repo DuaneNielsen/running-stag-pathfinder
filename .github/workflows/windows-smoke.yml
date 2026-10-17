@@ -80,7 +80,7 @@ jobs:
           if ($IsWindows) {
             $plat = 'windows-x64'; $archive = 'frontier-0.1.56-windows-x64.zip'; $top = Join-Path $pkg 'frontier-0.1.56-windows-x64'
             New-Item -ItemType Directory -Force -Path (Join-Path $top 'bin'), (Join-Path $top 'share') | Out-Null
-            Copy-Item "$env:SystemRoot\System32\whoami.exe" (Join-Path $top 'bin\frontier.exe')
+            Copy-Item "$env:SystemRoot\System32\curl.exe" (Join-Path $top 'bin\frontier.exe')
             Set-Content -Path (Join-Path $top 'share\README.txt') -Value 'payload'
             Compress-Archive -Path $top -DestinationPath (Join-Path $rel $archive)
           } else {
@@ -132,8 +132,19 @@ jobs:
             if (-not (Select-String -Path $authlog -Pattern 'auth=ok' -Quiet)) { throw "FAIL: no authenticated request reached the host" }
             Write-Host "PASS: an authenticated request reached the host"
 
+            # The mod's own call must have succeeded too (the stand-in accepts --help), not only left a binary behind.
+            $modExit = $null
+            for ($i = 0; $i -lt 12 -and -not $modExit; $i++) {
+              $modExit = Get-Content $dbg -ErrorAction SilentlyContinue | Select-String -Pattern 'process\.run \(frontier\).* exited (\d+) in' | Select-Object -Last 1
+              if (-not $modExit) { Start-Sleep -Seconds 5 }
+            }
+            if (-not $modExit) { throw "FAIL: the debug log never recorded the mod's process.run result" }
+            Write-Host $modExit.Line.Substring(0, [Math]::Min(260, $modExit.Line.Length))
+            if ($modExit.Matches[0].Groups[1].Value -ne '0') { throw "FAIL: the mod's mise call exited $($modExit.Matches[0].Groups[1].Value)" }
+            Write-Host "PASS: the mod's own mise call exited 0"
+
             Remove-Item Env:FRONTIER_TOKEN -ErrorAction SilentlyContinue
-            if ($IsWindows) { & "$PWD\plugin\bin\frontier.cmd" } else { & "$PWD/plugin/bin/frontier" }
+            if ($IsWindows) { & "$PWD\plugin\bin\frontier.cmd" --version } else { & "$PWD/plugin/bin/frontier" --version }
             if ($LASTEXITCODE -ne 0) { throw "FAIL: wrapper exited $LASTEXITCODE" }
             Write-Host "PASS: wrapper ran the cached executable"
           } finally {
