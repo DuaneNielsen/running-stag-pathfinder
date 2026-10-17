@@ -55,10 +55,13 @@ jobs:
       - name: claude --version
         run: claude --version
 
-      - name: Build a local gated release (a real small executable) and its stub
+      # One step on purpose: a background server started in one step does not survive into the next on a runner
+      # (Windows kills it at the step's end; on Linux its stderr pipe closes with the step).
+      - name: Journey (gated release, plugin install, session, download, wrapper)
         run: |
-          $rel = Join-Path $env:RUNNER_TEMP 'rel'
-          $pkg = Join-Path $rel 'pkg'
+          $ErrorActionPreference = 'Stop'
+          $tmp = $env:RUNNER_TEMP
+          $rel = Join-Path $tmp 'rel'; $pkg = Join-Path $rel 'pkg'
           New-Item -ItemType Directory -Force -Path (Join-Path $pkg 'bin') | Out-Null
           if ($IsWindows) {
             Copy-Item "$env:SystemRoot\System32\whoami.exe" (Join-Path $pkg 'bin\frontier.exe')
@@ -70,101 +73,60 @@ jobs:
             tar -czf (Join-Path $rel $archive) -C $pkg .
           }
           $sha = (Get-FileHash (Join-Path $rel $archive) -Algorithm SHA256).Hash.ToLower()
-          $stub = @"
-          version = "0.1.56"
-          tool = "http:frontier"
-          bin = "bin/frontier"
-          headers = { Authorization = "Bearer {{ env.FRONTIER_TOKEN }}" }
-
-          [platforms.$plat]
-          url = "http://127.0.0.1:8799/$archive"
-          checksum = "sha256:$sha"
-          "@ -replace '(?m)^ {10}', ''
-          Set-Content -Path plugin/bin/frontier.stub -Value $stub -Encoding utf8NoBOM
+          $stub = "version = `"0.1.56`"`ntool = `"http:frontier`"`nbin = `"bin/frontier`"`nheaders = { Authorization = `"Bearer {{ env.FRONTIER_TOKEN }}`" }`n`n[platforms.$plat]`nurl = `"http://127.0.0.1:8799/$archive`"`nchecksum = `"sha256:$sha`"`n"
+          Set-Content -Path plugin/bin/frontier.stub -Value $stub -Encoding utf8NoBOM -NoNewline
           Get-Content plugin/bin/frontier.stub
-          "REL=$rel" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Start the Bearer-gated host
-        run: |
+          $authlog = Join-Path $tmp 'authsrv.log'
           $py = if ($IsWindows) { 'python' } else { 'python3' }
-          $log = Join-Path $env:RUNNER_TEMP 'authsrv.log'
-          Start-Process -FilePath $py -ArgumentList @('tools/authsrv.py', $env:REL, '8799') -RedirectStandardError $log -NoNewWindow
-          Start-Sleep -Seconds 3
-          "AUTHLOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          try { Invoke-WebRequest -Uri http://127.0.0.1:8799/ -UseBasicParsing | Out-Null } catch { Write-Host "no-token probe: $($_.Exception.Response.StatusCode)" }
+          $srv = Start-Process -FilePath $py -ArgumentList @('tools/authsrv.py', $rel, '8799', $authlog) -PassThru
+          try {
+            Start-Sleep -Seconds 3
+            try { Invoke-WebRequest -Uri "http://127.0.0.1:8799/$archive" -UseBasicParsing | Out-Null } catch { Write-Host "no-token probe refused: $($_.Exception.Message)" }
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:8799/$archive" -Headers @{ Authorization = 'Bearer beta-secret' } -UseBasicParsing
+            Write-Host "host check with token: $($r.StatusCode), $($r.RawContentLength) bytes"
 
-      - name: Isolate Claude config
-        run: |
-          $cfg = Join-Path $env:RUNNER_TEMP 'cfg'
-          New-Item -ItemType Directory -Force -Path $cfg | Out-Null
-          "CLAUDE_CONFIG_DIR=$cfg" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            $cfg = Join-Path $tmp 'cfg'; New-Item -ItemType Directory -Force -Path $cfg | Out-Null
+            $env:CLAUDE_CONFIG_DIR = $cfg
+            claude plugin validate plugin
+            claude plugin install frontier --marketplace $PWD --config beta_token=beta-secret
+            claude plugin list
 
-      - name: Install the plugin from this checkout (dummy token)
-        run: |
-          claude plugin validate plugin
-          claude plugin install frontier --marketplace $PWD --config beta_token=beta-secret
-          claude plugin list
+            Write-Host "--- start a session (no model login needed; the mod runs at session start)"
+            $dbg = Join-Path $tmp 'claude-debug.log'
+            claude -p "hi" --debug-file $dbg
+            Write-Host "claude exit: $LASTEXITCODE (1 is expected: not logged in)"
 
-      - name: Is the gated host alive after its own step?
-        continue-on-error: true
-        run: |
-          Get-Process | Where-Object { $_.ProcessName -match 'python' } | Select-Object Id, ProcessName | Format-Table | Out-String | Write-Host
-          Write-Host "release dir:"; Get-ChildItem $env:REL | Select-Object Name, Length | Format-Table | Out-String | Write-Host
-          $arch = (Get-ChildItem $env:REL -File | Select-Object -First 1).Name
-          try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:8799/$arch" -Headers @{ Authorization = 'Bearer beta-secret' } -UseBasicParsing; Write-Host "IWR status $($r.StatusCode) bytes $($r.RawContentLength)" } catch { Write-Host "IWR failed: $($_.Exception.Message)" }
-          Get-ChildItem Env: | Where-Object { $_.Name -match 'proxy' } | Format-Table | Out-String | Write-Host
-          Write-Host "--- host log"; Get-Content $env:AUTHLOG
-
-      - name: Run the mod's exact command by hand, verbose (diagnosis)
-        continue-on-error: true
-        run: |
-          $env:FRONTIER_TOKEN = 'beta-secret'
-          $env:MISE_VERBOSE = '1'
-          $bin = if ($IsWindows) { "$PWD\plugin\bin\mise.cmd" } else { "$PWD/plugin/bin/mise" }
-          Write-Host "using $bin"
-          Get-Content plugin/bin/frontier.stub
-          & $bin tool-stub "$PWD/plugin/bin/frontier.stub" --help 2>&1 | Select-Object -First 80
-          Write-Host "exit: $LASTEXITCODE"
-          Remove-Item Env:MISE_VERBOSE; Remove-Item Env:FRONTIER_TOKEN
-
-      - name: Start a session (no model login needed; the mod runs at session start)
-        continue-on-error: true
-        run: |
-          claude -p "hi" --debug-file (Join-Path $env:RUNNER_TEMP 'claude-debug.log')
-
-      - name: Wait for the gated download and assert it
-        run: |
-          $deadline = (Get-Date).AddSeconds(240)
-          $found = $null
-          while ((Get-Date) -lt $deadline -and -not $found) {
-            Start-Sleep -Seconds 5
-            $roots = @("$env:LOCALAPPDATA\mise", "$HOME/.local/share/mise", "$HOME\AppData\Local\mise") | Where-Object { $_ -and (Test-Path $_) }
-            foreach ($r in $roots) {
-              $f = Get-ChildItem -Path (Join-Path $r 'installs') -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -in 'frontier','frontier.exe' } | Select-Object -First 1
-              if ($f) { $found = $f.FullName; break }
+            $deadline = (Get-Date).AddSeconds(240); $found = $null
+            while ((Get-Date) -lt $deadline -and -not $found) {
+              Start-Sleep -Seconds 5
+              foreach ($root in @("$env:LOCALAPPDATA\mise", "$HOME/.local/share/mise")) {
+                if ($root -and (Test-Path (Join-Path $root 'installs'))) {
+                  $f = Get-ChildItem -Path (Join-Path $root 'installs') -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -in 'frontier','frontier.exe' } | Select-Object -First 1
+                  if ($f) { $found = $f.FullName; break }
+                }
+              }
             }
-          }
-          Write-Host "--- gated host log"; Get-Content $env:AUTHLOG -ErrorAction SilentlyContinue
-          if (-not $found) { Write-Host "FAIL: no frontier binary under mise installs after 240s"; exit 1 }
-          Write-Host "PASS: binary installed at $found"
-          if (-not (Select-String -Path $env:AUTHLOG -Pattern 'auth=ok' -Quiet)) { Write-Host "FAIL: no authenticated request reached the host"; exit 1 }
-          Write-Host "PASS: an authenticated request reached the host"
+            Write-Host "--- gated host log"; Get-Content $authlog
+            if (-not $found) { throw "FAIL: no frontier binary under mise installs after 240s" }
+            Write-Host "PASS: binary installed at $found"
+            if (-not (Select-String -Path $authlog -Pattern 'auth=ok' -Quiet)) { throw "FAIL: no authenticated request reached the host" }
+            Write-Host "PASS: an authenticated request reached the host"
 
-      - name: Run frontier through the plugin's bin wrapper (no token set)
-        run: |
-          Remove-Item Env:FRONTIER_TOKEN -ErrorAction SilentlyContinue
-          if ($IsWindows) { & "$PWD\plugin\bin\frontier.cmd" } else { & "$PWD/plugin/bin/frontier" }
-          if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: wrapper exited $LASTEXITCODE"; exit 1 }
-          Write-Host "PASS: wrapper ran the cached executable"
+            Remove-Item Env:FRONTIER_TOKEN -ErrorAction SilentlyContinue
+            if ($IsWindows) { & "$PWD\plugin\bin\frontier.cmd" } else { & "$PWD/plugin/bin/frontier" }
+            if ($LASTEXITCODE -ne 0) { throw "FAIL: wrapper exited $LASTEXITCODE" }
+            Write-Host "PASS: wrapper ran the cached executable"
+          } finally {
+            Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Diagnostics (always)
         if: always()
         run: |
-          Write-Host "--- claude debug log (mod/hook lines)"
-          Get-Content (Join-Path $env:RUNNER_TEMP 'claude-debug.log') -ErrorAction SilentlyContinue | Select-String -Pattern 'mod|hook|process|frontier|register|mise' | Select-Object -First 80
-          Write-Host "--- gated host log"; Get-Content $env:AUTHLOG -ErrorAction SilentlyContinue
-          Write-Host "--- mise dirs"
-          foreach ($r in @("$env:LOCALAPPDATA\mise", "$HOME/.local/share/mise")) { if ($r -and (Test-Path $r)) { Write-Host $r; Get-ChildItem $r -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty FullName } }
+          Write-Host "--- claude debug log: mod and process lines"
+          Get-Content (Join-Path $env:RUNNER_TEMP 'claude-debug.log') -ErrorAction SilentlyContinue | Select-String -Pattern 'frontier|process\.run|rollout' | ForEach-Object { $_.Line.Substring(0, [Math]::Min(300, $_.Line.Length)) } | Select-Object -First 40
+          Write-Host "--- gated host log"; Get-Content (Join-Path $env:RUNNER_TEMP 'authsrv.log') -ErrorAction SilentlyContinue
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
