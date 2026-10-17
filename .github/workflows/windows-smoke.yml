@@ -56,15 +56,17 @@ jobs:
       - name: "De-tune further: strip bash and sh from PATH (a Windows machine without Git for Windows or WSL)"
         if: matrix.nobash
         run: |
-          foreach ($t in 'bash','sh') {
-            while ($cmd = Get-Command $t -CommandType Application -ErrorAction SilentlyContinue) {
-              $dir = Split-Path $cmd.Source -Parent
-              Write-Host "removing $t dir: $dir"
-              $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and ($_ -ne $dir) }) -join ';'
-            }
+          $norm = { param($d) $d.TrimEnd('\', '/').ToLowerInvariant() }
+          for ($i = 0; $i -lt 20; $i++) {
+            $hit = $null
+            foreach ($t in 'bash', 'sh') { $c = Get-Command $t -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $hit = Split-Path $c.Source -Parent; break } }
+            if (-not $hit) { break }
+            Write-Host "removing dir holding bash/sh: $hit"
+            $drop = & $norm $hit
+            $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and ((& $norm $_) -ne $drop) }) -join ';'
           }
           "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          foreach ($t in 'bash','sh') { if (Get-Command $t -CommandType Application -ErrorAction SilentlyContinue) { Write-Host "FAIL: $t still on PATH"; exit 1 } }
+          foreach ($t in 'bash', 'sh') { if (Get-Command $t -CommandType Application -ErrorAction SilentlyContinue) { Write-Host "FAIL: $t still on PATH"; exit 1 } }
           Write-Host "no bash, no sh, no node, no bun"
 
       - name: claude --version
